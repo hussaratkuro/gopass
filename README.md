@@ -1,12 +1,12 @@
 ## Usage
-gopass [options] <length>
+gopass [options] [length]
 
 ## Options:
   -u, --upper       Use uppercase characters<br>
   -l, --lower       Use lowercase characters<br>
   -s, --symbols     Use symbols<br>
   -n, --numbers     Use numbers<br>
-  -f, --file <file> Save password to a file (requires filename argument)<br>
+  -f, --file [file] Save password to a file (requires filename argument)<br>
   -h, --help        Display this help message<br>
 
 ## Example:
