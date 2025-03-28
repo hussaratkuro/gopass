@@ -6,102 +6,190 @@ import (
 	"math/big"
 	"os"
 	"strconv"
-	"strings"
 
-	flag "github.com/spf13/pflag"
+	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
-func main() {
-    upperFlag := flag.BoolP("upper", "u", false, "Include uppercase characters")
-    lowerFlag := flag.BoolP("lower", "l", false, "Include lowercase characters")
-    symbolFlag := flag.BoolP("symbols", "s", false, "Include symbols")
-    numberFlag := flag.BoolP("numbers", "n", false, "Include numbers")
-    filePathFlag := flag.StringP("file", "f", "", "Save password to a file (requires filename argument)")
-    helpFlag := flag.BoolP("help", "h", false, "Display help")
+type model struct {
+    includeUpper    bool
+    includeLower    bool
+    includeSymbols  bool
+    includeNumbers  bool
 
-    flag.Usage = func() {
-        printUsage()
+    lengthInput     textinput.Model
+
+    password        string
+
+    focused         int
+    err             error
+}
+
+func initialModel() model {
+    ti := textinput.New()
+    ti.Placeholder = "Password Length (1-50)"
+    ti.Focus()
+
+    return model{
+        lengthInput:    ti,
+        includeUpper:   false,
+        includeLower:   false,
+        includeSymbols: false,
+        includeNumbers: false,
+        focused:        1,
     }
-    flag.Parse()
+}
 
-    if *helpFlag {
-        printUsage()
-        return
-    }
+func (m model) Init() tea.Cmd {
+    return textinput.Blink
+}
 
-    if flag.NArg() < 1 {
-        printUsage()
-        return
-    }
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+    var cmd tea.Cmd
 
-    lengthArg := flag.Arg(0)
-    length, err := strconv.Atoi(lengthArg)
+    switch msg := msg.(type) {
+        case tea.KeyMsg:
+            switch msg.String() {
+                case "ctrl+c", "q":
+                    return m, tea.Quit
+
+                case "up", "down":
+                    if msg.String() == "up" {
+                        m.focused = (m.focused - 1 + 6) % 6
+                    } else {
+                        m.focused = (m.focused + 1) % 6
+                    }
+
+                    if m.focused == 1 {
+                        m.lengthInput.Focus()
+                    } else {
+                        m.lengthInput.Blur()
+                    }
+
+                case " ":
+                    switch m.focused {
+                        case 2:
+                            m.includeUpper = !m.includeUpper
+                        case 3:
+                            m.includeLower = !m.includeLower
+                        case 4:
+                            m.includeSymbols = !m.includeSymbols
+                        case 5:
+                            m.includeNumbers = !m.includeNumbers
+                    }
+
+                case "enter":
+                    if m.focused == 0 {
+                        m.generatePassword()
+                    }
+            }
+
+            if m.focused == 1 {
+                m.lengthInput, cmd = m.lengthInput.Update(msg)
+            }
+	}
+	
+	return m, cmd
+}
+
+func (m *model) generatePassword() {
+    m.err = nil
+    m.password = ""
+
+    length, err := strconv.Atoi(m.lengthInput.Value())
     if err != nil || length <= 0 || length > 50 {
-        fmt.Println("Error: Length must be a number between 1 and 50.")
-        printUsage()
+        m.err = fmt.Errorf("length must be a number between 1 and 50")
         return
     }
 
     var charset string
-    if *upperFlag {
+    if m.includeUpper {
         charset += "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     }
-    if *lowerFlag {
+    if m.includeLower {
         charset += "abcdefghijklmnopqrstuvwxyz"
     }
-    if *symbolFlag {
+    if m.includeSymbols {
         charset += "!@#$%^&*()-_=+[]{}|;:,.<>/?"
     }
-    if *numberFlag {
+    if m.includeNumbers {
         charset += "0123456789"
     }
 
     if charset == "" {
-        fmt.Println("Error: No character sets selected. Please enable at least one of -u, -l, -s, or -n.")
-        printUsage()
+        m.err = fmt.Errorf("select at least one character set")
         return
     }
 
     password, err := generatePassword(length, charset)
     if err != nil {
-        fmt.Println("Error generating password:", err)
+        m.err = err
         return
     }
 
-    fmt.Printf("New password: %s\n", password)
+    m.password = password
+}
 
-    if *filePathFlag != "" {
-        filename := *filePathFlag
-        if !strings.Contains(filename, ".") {
-            filename += ".txt"
+func (m model) View() string {
+    titleStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7")).Bold(true)
+    focusedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f5e0dc"))
+    normalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#6c7086"))
+    checkboxStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#7f849c"))
+    selectedStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#cba6f7"))
+    errorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#f38ba8"))
+
+    renderCheckbox := func(label string, checked bool, focused bool) string {
+        checkbox := "[ ]"
+        if checked {
+            checkbox = "[x]"
         }
 
-        var file *os.File
-        if _, err := os.Stat(filename); os.IsNotExist(err) {
-            file, err = os.Create(filename)
-            if err != nil {
-                fmt.Println("Error creating file:", err)
-                return
-            }
-        } else {
-            file, err = os.OpenFile(filename, os.O_APPEND|os.O_WRONLY, 0644)
-            if err != nil {
-                fmt.Println("Error opening file:", err)
-                return
-            }
-            if _, err = file.WriteString("\n\n"); err != nil {
-                fmt.Println("Error writing to file:", err)
-                return
-            }
+        if focused {
+            return focusedStyle.Render(fmt.Sprintf("%s %s", checkbox, label))
         }
-        defer file.Close()
 
-        if _, err = file.WriteString(password); err != nil {
-            fmt.Println("Error writing password to file:", err)
-            return
+        if checked {
+            return selectedStyle.Render(fmt.Sprintf("%s %s", checkbox, label))
         }
-        fmt.Printf("Password saved to %s\n", filename)
+
+        return checkboxStyle.Render(fmt.Sprintf("%s %s", checkbox, label))
     }
+
+    view := titleStyle.Render("Password Generator TUI") + "\n\n"
+
+    lengthLabel := "Password Length: "
+    if m.focused == 1 {
+        lengthLabel = focusedStyle.Render("> " + lengthLabel)
+    } else {
+        lengthLabel = normalStyle.Render("  " + lengthLabel)
+    }
+    view += lengthLabel + m.lengthInput.View() + "\n\n"
+
+    view += renderCheckbox("Uppercase", m.includeUpper, m.focused == 2) + "\n"
+    view += renderCheckbox("Lowercase", m.includeLower, m.focused == 3) + "\n"
+    view += renderCheckbox("Symbols", m.includeSymbols, m.focused == 4) + "\n"
+    view += renderCheckbox("Numbers", m.includeNumbers, m.focused == 5) + "\n\n"
+
+    generateLabel := "Generate Password"
+    if m.focused == 0 {
+        generateLabel = focusedStyle.Render("> " + generateLabel)
+    } else {
+        generateLabel = normalStyle.Render("  " + generateLabel)
+    }
+    view += generateLabel + "\n\n"
+
+    if m.err != nil {
+        view += errorStyle.Render("Error: " + m.err.Error()) + "\n\n"
+    }
+
+    if m.password != "" {
+        view += "Generated Password: " + selectedStyle.Render(m.password) + "\n"
+    }
+
+    view += "\n\nUse arrow keys to navigate, space to toggle, enter to generate, 'q' to quit"
+
+    return view
 }
 
 func generatePassword(length int, charset string) (string, error) {
@@ -116,25 +204,10 @@ func generatePassword(length int, charset string) (string, error) {
     return string(password), nil
 }
 
-func printUsage() {
-    usage := "   ____ _____  ____  ____ ___________\n" +
-        "  / __ `/ __ \\/ __ \\/ __ `/ ___/ ___/\n" +
-        " / /_/ / /_/ / /_/ / /_/ (__  |__  ) \n" +
-        " \\__, /\\____/ .___/\\__,_/____/____/  \n" +
-        "/____/     /_/                       \n" +
-        "(Compiled Fri Feb 28 19:49:55 2025)\n\n" +
-        "Usage:\n" +
-        "  gopass [options] <length>\n\n" +
-        "Options:\n" +
-        "  -u, --upper       Use uppercase characters\n" +
-        "  -l, --lower       Use lowercase characters\n" +
-        "  -s, --symbols     Use symbols\n" +
-        "  -n, --numbers     Use numbers\n" +
-        "  -f, --file <file> Save password to a file (requires filename argument)\n" +
-        "  -h, --help        Display this help message\n\n" +
-        "Example:\n" +
-        "  gopass -ulsn -f ./example.txt 16\n" +
-        "  This generates a 16-character password using uppercase, lowercase, symbols, and numbers.\n" +
-        "  The password is printed and also appended to \"./example.txt\".\n"
-    fmt.Println(usage)
+func main() {
+    p := tea.NewProgram(initialModel())
+    if _, err := p.Run(); err != nil {
+        fmt.Println("error running program:", err)
+        os.Exit(1)
+    }
 }
