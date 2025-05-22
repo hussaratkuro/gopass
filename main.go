@@ -88,9 +88,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
             if m.focused == 1 {
                 m.lengthInput, cmd = m.lengthInput.Update(msg)
             }
-	}
-	
-	return m, cmd
+    }
+
+    return m, cmd
 }
 
 func (m *model) generatePassword() {
