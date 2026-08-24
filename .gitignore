@@ -1,0 +1,6 @@
+# Compiled binary (produced by `go build .` / `go build ./...` without -o)
+/gopass
+
+# Test/profiling artifacts
+*.test
+*.out
