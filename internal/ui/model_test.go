@@ -240,6 +240,7 @@ func TestManagerAddAndDeleteEntry(t *testing.T) {
 	for _, r := range "s3cret" {
 		tm, _ = tm.Update(key(string(r)))
 	}
+	tm, _ = tm.Update(key("down")) // -> TOTP
 	tm, _ = tm.Update(key("down")) // -> Save
 	m = tm.(Model)
 	if m.manager.entryFocus != entryFocusSave {
@@ -273,5 +274,33 @@ func TestManagerAddAndDeleteEntry(t *testing.T) {
 	m = tm.(Model)
 	if m.screen != ScreenManagerList || len(m.manager.vault.Entries) != 0 {
 		t.Fatalf("expected entry deleted and back at list, got screen=%v entries=%d", m.screen, len(m.manager.vault.Entries))
+	}
+}
+
+func TestManagerEditsEntryWithoutChangingItsIdentity(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	m := New()
+	m.manager.vault = vault.New()
+	m.manager.vaultPassword = "hunter2"
+	entry := entryFixture("Old title", "https://example.test", "alice")
+	entry.TOTPSecret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+	m.manager.vault.Upsert(entry)
+	m.manager.refreshResults()
+	m.manager.selected = entry
+	m.screen = ScreenManagerDetail
+
+	var tm tea.Model = m
+	tm, _ = tm.Update(key("e"))
+	m = tm.(Model)
+	if m.screen != ScreenManagerAddEntry || !m.manager.entryEditing || m.manager.entryTOTPInput.Value() != entry.TOTPSecret {
+		t.Fatalf("edit form not populated: screen=%v editing=%t", m.screen, m.manager.entryEditing)
+	}
+	m.manager.entryTitleInput.SetValue("New title")
+	m.manager.entryFocus = entryFocusSave
+	tm = m
+	tm, _ = tm.Update(key("enter"))
+	m = tm.(Model)
+	if len(m.manager.vault.Entries) != 1 || m.manager.vault.Entries[0].ID != entry.ID || m.manager.vault.Entries[0].Title != "New title" {
+		t.Fatalf("edit changed identity or duplicated entry: %#v", m.manager.vault.Entries)
 	}
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -33,8 +34,10 @@ type Model struct {
 	generator generatorState
 	manager   managerState
 
-	width, height int
-	quitting      bool
+	width, height    int
+	quitting         bool
+	commands         commandPalette
+	clipboardVersion uint64
 }
 
 // New builds the initial application model, showing the action selector.
@@ -60,6 +63,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
 
+	case clipboardClearMsg:
+		current, err := clipboard.ReadAll()
+		if err == nil && msg.version == m.clipboardVersion && current == msg.value {
+			_ = clipboard.WriteAll("")
+			if m.screen == ScreenManagerDetail || m.screen == ScreenManagerList {
+				m.manager.status = "Clipboard cleared"
+			}
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
@@ -73,6 +86,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.commands.open {
+		return m.updateCommandPalette(msg)
+	}
+	if (msg.String() == "ctrl+shift+p" || msg.String() == "ctrl+p") && m.commandPaletteAvailable() {
+		m.openCommandPalette()
+		return m, nil
+	}
 	if msg.String() == "ctrl+c" {
 		m.quitting = true
 		return m, tea.Quit

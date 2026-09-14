@@ -5,11 +5,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/hussaratkuro/gopass/internal/firefox"
+	"github.com/hussaratkuro/gopass/internal/totp"
 	"github.com/hussaratkuro/gopass/internal/vault"
 )
 
@@ -22,6 +22,7 @@ const (
 	entryFocusURL
 	entryFocusUsername
 	entryFocusPassword
+	entryFocusTOTP
 	entryFocusSave
 	entryFocusCount
 )
@@ -50,7 +51,10 @@ type managerState struct {
 	entryURLInput      textinput.Model
 	entryUsernameInput textinput.Model
 	entryPasswordInput textinput.Model
+	entryTOTPInput     textinput.Model
 	entryFocus         int
+	entryEditing       bool
+	entryOriginal      vault.Entry
 
 	err    error
 	status string
@@ -87,6 +91,13 @@ func newManagerState() managerState {
 
 	password := textinput.New()
 	password.Placeholder = "Password"
+	password.EchoMode = textinput.EchoPassword
+	password.EchoCharacter = '•'
+
+	totpInput := textinput.New()
+	totpInput.Placeholder = "TOTP Base32 secret or otpauth:// URI (optional)"
+	totpInput.EchoMode = textinput.EchoPassword
+	totpInput.EchoCharacter = '•'
 
 	return managerState{
 		passwordInput:      pw,
@@ -97,6 +108,7 @@ func newManagerState() managerState {
 		entryURLInput:      url,
 		entryUsernameInput: username,
 		entryPasswordInput: password,
+		entryTOTPInput:     totpInput,
 	}
 }
 
@@ -249,6 +261,9 @@ func (m Model) handleListKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.manager.entryURLInput.SetValue("")
 		m.manager.entryUsernameInput.SetValue("")
 		m.manager.entryPasswordInput.SetValue("")
+		m.manager.entryTOTPInput.SetValue("")
+		m.manager.entryEditing = false
+		m.manager.entryOriginal = vault.Entry{}
 		m.manager.entryFocus = entryFocusTitle
 		m.manager.refocusEntryForm()
 		m.screen = ScreenManagerAddEntry
@@ -307,12 +322,29 @@ func (m Model) handleDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.manager.reveal = !m.manager.reveal
 		return m, nil
 	case "c":
-		_ = clipboard.WriteAll(m.manager.selected.Password)
-		m.manager.status = "Password copied to clipboard"
-		return m, nil
+		return m.copySecret(m.manager.selected.Password, "Password")
 	case "u":
-		_ = clipboard.WriteAll(m.manager.selected.Username)
-		m.manager.status = "Username copied to clipboard"
+		return m.copySecret(m.manager.selected.Username, "Username")
+	case "t":
+		code, err := totp.Code(m.manager.selected.TOTPSecret, time.Now())
+		if err != nil {
+			m.manager.err = err
+			return m, nil
+		}
+		return m.copySecret(code, "TOTP code")
+	case "e":
+		m.manager.err = nil
+		m.manager.status = ""
+		m.manager.entryOriginal = m.manager.selected
+		m.manager.entryEditing = true
+		m.manager.entryTitleInput.SetValue(m.manager.selected.Title)
+		m.manager.entryURLInput.SetValue(m.manager.selected.URL)
+		m.manager.entryUsernameInput.SetValue(m.manager.selected.Username)
+		m.manager.entryPasswordInput.SetValue(m.manager.selected.Password)
+		m.manager.entryTOTPInput.SetValue(m.manager.selected.TOTPSecret)
+		m.manager.entryFocus = entryFocusTitle
+		m.manager.refocusEntryForm()
+		m.screen = ScreenManagerAddEntry
 		return m, nil
 	}
 	return m, nil
@@ -387,6 +419,8 @@ func (m Model) handleAddEntryKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.manager.entryUsernameInput, cmd = m.manager.entryUsernameInput.Update(msg)
 	case entryFocusPassword:
 		m.manager.entryPasswordInput, cmd = m.manager.entryPasswordInput.Update(msg)
+	case entryFocusTOTP:
+		m.manager.entryTOTPInput, cmd = m.manager.entryTOTPInput.Update(msg)
 	}
 	return m, cmd
 }
@@ -403,13 +437,25 @@ func (m Model) saveNewEntry() (tea.Model, tea.Cmd) {
 	}
 
 	entry := vault.Entry{
-		ID:        fmt.Sprintf("manual|%d", time.Now().UnixNano()),
-		Title:     title,
-		URL:       url,
-		Username:  m.manager.entryUsernameInput.Value(),
-		Password:  m.manager.entryPasswordInput.Value(),
-		Source:    "manual",
-		UpdatedAt: time.Now(),
+		ID:         fmt.Sprintf("manual|%d", time.Now().UnixNano()),
+		Title:      title,
+		URL:        url,
+		Username:   m.manager.entryUsernameInput.Value(),
+		Password:   m.manager.entryPasswordInput.Value(),
+		TOTPSecret: strings.TrimSpace(m.manager.entryTOTPInput.Value()),
+		Source:     "manual",
+		UpdatedAt:  time.Now(),
+	}
+	if m.manager.entryEditing {
+		entry.ID = m.manager.entryOriginal.ID
+		entry.Source = m.manager.entryOriginal.Source
+		entry.Notes = m.manager.entryOriginal.Notes
+	}
+	if entry.TOTPSecret != "" {
+		if _, err := totp.Code(entry.TOTPSecret, time.Now()); err != nil {
+			m.manager.err = fmt.Errorf("TOTP: %w", err)
+			return m, nil
+		}
 	}
 	m.manager.vault.Upsert(entry)
 	if err := m.manager.vault.Save(m.manager.vaultPassword); err != nil {
@@ -417,7 +463,13 @@ func (m Model) saveNewEntry() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.manager.status = fmt.Sprintf("Added %q", entry.Title)
+	verb := "Added"
+	if m.manager.entryEditing {
+		verb = "Updated"
+	}
+	m.manager.status = fmt.Sprintf("%s %q", verb, entry.Title)
+	m.manager.entryEditing = false
+	m.manager.entryOriginal = vault.Entry{}
 	m.manager.err = nil
 	m.screen = ScreenManagerList
 	m.manager.refreshResults()
@@ -429,6 +481,7 @@ func (m *managerState) refocusEntryForm() {
 	m.entryURLInput.Blur()
 	m.entryUsernameInput.Blur()
 	m.entryPasswordInput.Blur()
+	m.entryTOTPInput.Blur()
 	switch m.entryFocus {
 	case entryFocusTitle:
 		m.entryTitleInput.Focus()
@@ -438,5 +491,7 @@ func (m *managerState) refocusEntryForm() {
 		m.entryUsernameInput.Focus()
 	case entryFocusPassword:
 		m.entryPasswordInput.Focus()
+	case entryFocusTOTP:
+		m.entryTOTPInput.Focus()
 	}
 }

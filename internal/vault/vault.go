@@ -37,14 +37,15 @@ const (
 
 // Entry is a single stored credential.
 type Entry struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	URL       string    `json:"url"`
-	Username  string    `json:"username"`
-	Password  string    `json:"password"`
-	Notes     string    `json:"notes"`
-	Source    string    `json:"source"` // "firefox" or "manual"
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	URL        string    `json:"url"`
+	Username   string    `json:"username"`
+	Password   string    `json:"password"`
+	TOTPSecret string    `json:"totp_secret,omitempty"`
+	Notes      string    `json:"notes"`
+	Source     string    `json:"source"` // "firefox" or "manual"
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // Vault is an in-memory, decrypted collection of entries.
@@ -222,6 +223,12 @@ func (v *Vault) MergeImported(entries []Entry) (added, updated int) {
 	}
 	for _, e := range entries {
 		if i, ok := index[importKey(e)]; ok {
+			if e.TOTPSecret == "" {
+				e.TOTPSecret = v.Entries[i].TOTPSecret
+			}
+			if e.Notes == "" {
+				e.Notes = v.Entries[i].Notes
+			}
 			v.Entries[i] = e
 			updated++
 		} else {

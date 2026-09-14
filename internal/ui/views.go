@@ -3,11 +3,17 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/hussaratkuro/gopass/internal/totp"
 )
 
 func (m Model) View() string {
 	if m.quitting {
 		return ""
+	}
+	if m.commands.open {
+		return viewCommandPalette(m)
 	}
 
 	switch m.screen {
@@ -31,6 +37,26 @@ func (m Model) View() string {
 	return ""
 }
 
+func viewCommandPalette(m Model) string {
+	items := m.filteredCommands()
+	var body strings.Builder
+	body.WriteString(TitleStyle.Render("Command Palette") + "\n\n")
+	body.WriteString(FocusedStyle.Render("> ") + m.commands.query + "\n")
+	body.WriteString(MutedStyle.Render(strings.Repeat("─", 54)) + "\n")
+	if len(items) == 0 {
+		body.WriteString(MutedStyle.Render("No matching commands") + "\n")
+	}
+	for index, item := range items {
+		line := "  " + item.label
+		if index == m.commands.cursor {
+			line = FocusedStyle.Render("> " + item.label)
+		}
+		body.WriteString(line + "\n")
+	}
+	body.WriteString("\n" + HelpStyle.Render("type to filter · ↑/↓ select · Enter run · Esc close"))
+	return body.String()
+}
+
 func viewMenu(index int) string {
 	var b strings.Builder
 	b.WriteString(TitleStyle.Render("gopass") + "\n\n")
@@ -41,7 +67,7 @@ func viewMenu(index int) string {
 			b.WriteString(NormalStyle.Render("  "+item) + "\n")
 		}
 	}
-	b.WriteString("\n" + HelpStyle.Render("↑/↓ navigate · enter select · q quit"))
+	b.WriteString("\n" + HelpStyle.Render("↑/↓ navigate · enter select · Ctrl+Shift+P commands · q quit"))
 	return b.String()
 }
 
@@ -124,6 +150,13 @@ func viewDetail(mgr managerState) string {
 		pw = e.Password
 	}
 	b.WriteString(MutedStyle.Render("Password: ") + SelectedStyle.Render(pw) + "\n")
+	if e.TOTPSecret != "" {
+		now := time.Now()
+		if code, err := totp.Code(e.TOTPSecret, now); err == nil {
+			b.WriteString(MutedStyle.Render("TOTP:     ") + SelectedStyle.Render(code) +
+				MutedStyle.Render(fmt.Sprintf("  (%ds)", totp.Remaining(e.TOTPSecret, now))) + "\n")
+		}
+	}
 
 	if mgr.status != "" {
 		b.WriteString("\n" + SuccessStyle.Render(mgr.status) + "\n")
@@ -132,13 +165,21 @@ func viewDetail(mgr managerState) string {
 		b.WriteString("\n" + ErrorStyle.Render("Press 'd' again to delete this entry, any other key to cancel.") + "\n")
 	}
 
-	b.WriteString("\n" + HelpStyle.Render("r reveal · c copy password · u copy username · d delete · esc back"))
+	help := "e edit · r reveal · c copy password · u copy username"
+	if e.TOTPSecret != "" {
+		help += " · t copy TOTP"
+	}
+	b.WriteString("\n" + HelpStyle.Render(help+" · d delete · esc back"))
 	return b.String()
 }
 
 func viewAddEntry(mgr managerState) string {
 	var b strings.Builder
-	b.WriteString(TitleStyle.Render("Add Entry") + "\n\n")
+	title := "Add Entry"
+	if mgr.entryEditing {
+		title = "Edit Entry"
+	}
+	b.WriteString(TitleStyle.Render(title) + "\n\n")
 
 	field := func(label string, ti string, focused bool) string {
 		if focused {
@@ -151,6 +192,7 @@ func viewAddEntry(mgr managerState) string {
 	b.WriteString(field("URL:      ", mgr.entryURLInput.View(), mgr.entryFocus == entryFocusURL))
 	b.WriteString(field("Username: ", mgr.entryUsernameInput.View(), mgr.entryFocus == entryFocusUsername))
 	b.WriteString(field("Password: ", mgr.entryPasswordInput.View(), mgr.entryFocus == entryFocusPassword))
+	b.WriteString(field("TOTP:     ", mgr.entryTOTPInput.View(), mgr.entryFocus == entryFocusTOTP))
 
 	b.WriteString("\n")
 	if mgr.entryFocus == entryFocusSave {
